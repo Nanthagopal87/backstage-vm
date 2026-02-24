@@ -6,6 +6,10 @@ sudo systemctl restart nginx
 
 sudo nano /etc/nginx/sites-available/backstage
 
+sudo systemctl restart nginx
+
+NOTE: proxy_pass https://localhost:7007/; # <--- CHANGE THIS TO HTTPS | 3000 -> local | 7007 -> docker
+
 ### Docker Image
 https://backstage.io/docs/deployment/docker
 
