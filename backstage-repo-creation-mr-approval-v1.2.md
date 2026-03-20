@@ -1,0 +1,1394 @@
+# Backstage – Repo Creation via Template with MR Approval
+
+> GitLab Repo Creation · Backstage Scaffolder · MR-Gated Approval · Auto Provisioning  
+> **Stack:** Backstage · GitLab · Custom Backend Plugin  
+> **Version:** 1.2 | March 2026
+
+---
+
+## Table of Contents
+
+1. [Overview & Architecture](#1-overview--architecture)
+2. [Prerequisites](#2-prerequisites)
+3. [File Structure](#3-file-structure)
+4. [Step 1 – Scaffolder Template (template.yaml)](#4-step-1--scaffolder-template-templateyaml)
+5. [Step 2 – Request Skeleton File](#5-step-2--request-skeleton-file)
+6. [Step 3 – Backend Plugin (repoProvisioner.ts)](#6-step-3--backend-plugin-repoprovisionerts)
+7. [Step 4 – Register Plugin in index.ts](#7-step-4--register-plugin-in-indexts)
+8. [Step 5 – Install Scaffolder GitLab Module](#8-step-5--install-scaffolder-gitlab-module)
+9. [Step 6 – app-config.yaml Changes](#9-step-6--app-configyaml-changes)
+10. [Step 7 – app-config.production.yaml Changes](#10-step-7--app-configproductionyaml-changes)
+11. [Step 8 – CODEOWNERS in platform/repo-requests](#11-step-8--codeowners-in-platformrepo-requests)
+12. [Step 9 – GitLab Webhook Setup](#12-step-9--gitlab-webhook-setup)
+13. [Step 10 – Generate Webhook Secret Token](#13-step-10--generate-webhook-secret-token)
+14. [Step 11 – Rebuild & Deploy](#14-step-11--rebuild--deploy)
+15. [Verification](#15-verification)
+16. [End-to-End Developer Flow](#16-end-to-end-developer-flow)
+17. [Troubleshooting](#17-troubleshooting)
+18. [Quick Reference](#18-quick-reference)
+
+---
+
+## 1. Overview & Architecture
+
+This guide implements a GitLab repo creation flow where a developer fills out a Backstage Software Template form, which raises a GitLab MR for platform team approval. On MR merge, a custom backend plugin automatically creates the repo, pushes skeleton files, and the component registers itself in the Backstage catalog via GitLab discovery.
+
+### Flow Diagram
+
+```
+Developer fills Backstage Template form
+  (repo name · description · owner team)
+        ↓
+Backstage Scaffolder runs
+  Step 1: Renders requests/<repo-name>.yaml from skeleton
+  Step 2: Pushes file to platform/repo-requests as new branch
+  Step 3: Opens MR with structured description
+        ↓
+Platform team reviews MR diff in GitLab
+  (CODEOWNERS enforces approval requirement)
+        ↓
+Platform team merges MR
+        ↓
+GitLab Webhook → Backstage /api/repo-provisioner/webhook
+        ↓
+  → Reads request YAML from merged MR
+  → Creates repo under cloudopsedge/<repo-name>
+  → Pushes README.md + catalog-info.yaml + mkdocs.yml
+  → Comments result back on MR
+        ↓
+GitLab Discovery picks up catalog-info.yaml (~next scan cycle)
+        ↓
+Component appears in Backstage catalog
+```
+
+### What Gets Created Automatically
+
+| Artifact | Location | Purpose |
+|---|---|---|
+| `requests/<repo-name>.yaml` | `platform/repo-requests` | Approval artifact — platform team reviews this |
+| `README.md` | New repo root | Populated with name and description |
+| `catalog-info.yaml` | New repo root | Registers component in Backstage catalog |
+| `mkdocs.yml` | New repo root | TechDocs ready from day one |
+
+### Token Scope Requirements
+
+| Token | Scope Required | Used For |
+|---|---|---|
+| `GITLAB_TOKEN` | `api` | Creating branches, MRs, repos, pushing files |
+| `REPO_PROVISIONER_WEBHOOK_SECRET` | N/A — random string | Verifying webhook authenticity |
+
+> ⚠️ **WARNING:** `api` scope is required — not just `read_api`. The scaffolder action needs write access to create branches and MRs. The provisioner needs it to create repos and push files. Both use the same `GITLAB_TOKEN`.
+
+---
+
+## 2. Prerequisites
+
+| Requirement | Status |
+|---|---|
+| Backstage running on Docker with PostgreSQL | ✅ Already done |
+| GitLab integration configured in `app-config.yaml` | ✅ Already done |
+| `platform/repo-requests` repo exists in GitLab | ✅ Already created |
+| GitLab catalog discovery running | ✅ Already done |
+| TechDocs configured | ✅ Already done |
+| `Template` and `Location` added to `catalog.rules` | 🔲 Required — see Step 6 |
+| GitLab token has `api` scope | 🔲 Required — see Section 1 |
+
+---
+
+## 3. File Structure
+
+```
+backstage/
+  packages/backend/src/
+    ├── index.ts                              ← register plugins
+    └── plugins/
+          └── repoProvisioner.ts              ← custom backend plugin
+
+gitlab-templates-repo/
+  templates/
+    └── create-gitlab-repo/
+          ├── template.yaml                   ← scaffolder template
+          └── skeleton/
+                └── requests/
+                      └── ${{ values.repoName }}.yaml   ← ONLY file in skeleton
+
+platform/repo-requests/                       ← already exists
+  └── CODEOWNERS                              ← approval gate
+```
+
+> ⚠️ **WARNING:** The skeleton folder must contain ONLY `requests/${{ values.repoName }}.yaml`. Do not place `README.md`, `catalog-info.yaml`, `mkdocs.yml`, or `.gitkeep` in the skeleton — those files are generated by the webhook provisioner into the new repo, not committed to `platform/repo-requests`.
+
+---
+
+## 4. Step 1 – Scaffolder Template (template.yaml)
+
+Create at `templates/create-gitlab-repo/template.yaml` in your GitLab templates repo:
+
+```yaml
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: create-gitlab-repo
+  title: Create GitLab Repository
+  description: Request a new GitLab repository. Creates an MR for platform team approval.
+  tags:
+    - gitlab
+    - repository
+    - recommended
+spec:
+  owner: group:default/platform-common-team
+  type: service
+
+  # ── Input form ──────────────────────────────────────────────────────────────
+  parameters:
+    - title: Repository Details
+      required:
+        - repoName
+        - description
+        - owner
+      properties:
+        repoName:
+          title: Repository Name
+          type: string
+          description: Name of the new GitLab repo (lowercase, hyphens only)
+          pattern: '^[a-z0-9-]+$'
+          ui:autofocus: true
+
+        description:
+          title: Description
+          type: string
+          description: Short description of what this repo is for
+          ui:widget: textarea
+          ui:options:
+            rows: 3
+
+        owner:
+          title: Owner Team
+          type: string
+          description: Team that will own this repository
+          ui:field: OwnerPicker
+          ui:options:
+            catalogFilter:
+              kind: Group
+
+  # ── Scaffolder steps ─────────────────────────────────────────────────────────
+  steps:
+    - id: fetch-template
+      name: Fetch Request Template
+      action: fetch:template
+      input:
+        url: ./skeleton
+        values:
+          repoName: ${{ parameters.repoName }}
+          description: ${{ parameters.description }}
+          owner: ${{ parameters.owner }}
+          requestedBy: ${{ user.entity.metadata.name }}
+          namespace: cloudopsedge
+          # NOTE: Do not use ${{ '' | now }} — 'now' filter does not exist
+          # in Backstage Nunjucks and will render literally instead of evaluating
+
+    - id: create-mr
+      name: Open Approval MR
+      action: publish:gitlab:merge-request
+      input:
+        repoUrl: gitlab.com?owner=cloudopsedge&repo=repo-requests
+        # NOTE: If repo-requests is in a subgroup use %2F separator:
+        # repoUrl: gitlab.com?owner=cloudopsedge%2Fplatform&repo=repo-requests
+        title: "feat: create repo ${{ parameters.repoName }}"
+        description: |
+          ## New Repository Request
+
+          | Field | Value |
+          |---|---|
+          | **Repo Name** | `${{ parameters.repoName }}` |
+          | **Description** | ${{ parameters.description }} |
+          | **Owner Team** | ${{ parameters.owner }} |
+          | **Requested By** | ${{ user.entity.metadata.name }} |
+
+          ---
+          ✅ Merge this MR to trigger automatic repo creation.
+          ❌ Close without merging to reject the request.
+        branchName: request/${{ parameters.repoName }}
+        targetBranchName: main
+        sourcePath: .
+        commitAction: create
+
+  # ── Output ───────────────────────────────────────────────────────────────────
+  output:
+    links:
+      - title: View Approval MR
+        url: ${{ steps['create-mr'].output.mergeRequestUrl }}
+        icon: gitlab
+    text:
+      - title: Next Steps
+        content: |
+          Your repository request has been submitted.
+          The platform team will review and approve the MR.
+          Once approved, your repo will be created at:
+          `https://gitlab.com/cloudopsedge/${{ parameters.repoName }}`
+```
+
+### Key Notes on Template Fields
+
+| Field | Notes |
+|---|---|
+| `commitMessage` | ❌ Not a valid input for `publish:gitlab:merge-request` — causes `InputError` |
+| `sourcePath: .` | ✅ Required — tells the action where fetched skeleton files are |
+| `commitAction: create` | ✅ Required — explicitly creates new files rather than updating |
+| `${{ '' | now }}` | ❌ `now` filter does not exist in Backstage Nunjucks — renders literally |
+| `repoUrl` with subgroup | Use `%2F` not `/` for subgroup separator in owner value |
+
+---
+
+## 5. Step 2 – Request Skeleton File
+
+### Folder Structure
+
+```
+skeleton/
+  └── requests/
+        └── ${{ values.repoName }}.yaml    ← only file here
+```
+
+The filename `${{ values.repoName }}.yaml` is a Nunjucks template — Backstage replaces it with the actual repo name at runtime. So `payment-service` becomes `requests/payment-service.yaml` in the MR.
+
+### File Content
+
+Create `templates/create-gitlab-repo/skeleton/requests/${{ values.repoName }}.yaml`:
+
+```yaml
+apiVersion: platform.io/v1
+kind: RepoRequest
+metadata:
+  name: ${{ values.repoName }}
+  requestedBy: ${{ values.requestedBy }}
+spec:
+  repoName: ${{ values.repoName }}
+  description: ${{ values.description }}
+  ownerTeam: ${{ values.owner }}
+  namespace: ${{ values.namespace }}
+  type: service
+  visibility: private
+  defaultBranch: main
+  status: pending
+```
+
+### How Values Map
+
+| Placeholder | Source | Example Output |
+|---|---|---|
+| `${{ values.repoName }}` | `parameters.repoName` from form | `payment-service` |
+| `${{ values.requestedBy }}` | `user.entity.metadata.name` | `nanthagopal` |
+| `${{ values.description }}` | `parameters.description` from form | `Handles payment processing` |
+| `${{ values.owner }}` | `parameters.owner` from OwnerPicker | `group:default/infra-team` |
+| `${{ values.namespace }}` | Hardcoded in template.yaml | `cloudopsedge` |
+
+### Rendered Example
+
+After a developer submits the form, the MR diff shows:
+
+```yaml
+apiVersion: platform.io/v1
+kind: RepoRequest
+metadata:
+  name: payment-service
+  requestedBy: nanthagopal
+spec:
+  repoName: payment-service
+  description: Handles payment processing
+  ownerTeam: group:default/infra-team
+  namespace: cloudopsedge
+  type: service
+  visibility: private
+  defaultBranch: main
+  status: pending
+```
+
+---
+
+## 6. Step 3 – Backend Plugin (repoProvisioner.ts)
+
+Create `packages/backend/src/plugins/repoProvisioner.ts`:
+
+```typescript
+import {
+  createBackendPlugin,
+  coreServices,
+} from '@backstage/backend-plugin-api';
+import { Router } from 'express';
+
+// ── Skeleton file generators ──────────────────────────────────────────────────
+
+function generateReadme(repoName: string, description: string): string {
+  return `# ${repoName}
+
+${description}
+
+## Overview
+
+Add your service overview here.
+
+## Getting Started
+
+Add setup instructions here.
+`;
+}
+
+function generateCatalogInfo(
+  repoName: string,
+  description: string,
+  ownerTeam: string,
+): string {
+  const owner = ownerTeam.startsWith('group:')
+    ? ownerTeam
+    : `group:default/${ownerTeam}`;
+
+  return `apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${repoName}
+  description: "${description}"
+  annotations:
+    gitlab.com/project-slug: cloudopsedge/${repoName}
+    backstage.io/techdocs-ref: dir:.
+spec:
+  type: service
+  lifecycle: experimental
+  owner: ${owner}
+`;
+}
+
+function generateMkdocs(repoName: string, description: string): string {
+  return `site_name: '${repoName}'
+site_description: '${description}'
+docs_dir: .
+nav:
+  - Home: README.md
+plugins:
+  - techdocs-core
+`;
+}
+
+// ── GitLab API helpers ─────────────────────────────────────────────────────────
+
+async function gitlabPost(
+  path: string,
+  body: Record<string, unknown>,
+  token: string,
+  baseUrl: string,
+): Promise<Response> {
+  return fetch(`${baseUrl}/api/v4${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'PRIVATE-TOKEN': token,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+async function resolveNamespaceId(
+  namespace: string,
+  token: string,
+  baseUrl: string,
+): Promise<number> {
+  const res = await fetch(
+    `${baseUrl}/api/v4/namespaces?search=${namespace}`,
+    { headers: { 'PRIVATE-TOKEN': token } },
+  );
+  const namespaces: Array<{ id: number; path: string }> = await res.json();
+  const found = namespaces.find(n => n.path === namespace);
+  if (!found) throw new Error(`Namespace not found: ${namespace}`);
+  return found.id;
+}
+
+async function createRepo(
+  repoName: string,
+  description: string,
+  namespace: string,
+  token: string,
+  baseUrl: string,
+): Promise<{ id: number; web_url: string }> {
+  const namespaceId = await resolveNamespaceId(namespace, token, baseUrl);
+
+  const res = await gitlabPost(
+    '/projects',
+    {
+      name: repoName,
+      path: repoName,
+      description,
+      namespace_id: namespaceId,
+      visibility: 'private',
+      initialize_with_readme: false,
+      default_branch: 'main',
+    },
+    token,
+    baseUrl,
+  );
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Failed to create repo: ${res.status} ${err}`);
+  }
+
+  return res.json();
+}
+
+async function pushSkeletonFiles(
+  projectId: number,
+  files: Array<{ filePath: string; content: string }>,
+  token: string,
+  baseUrl: string,
+): Promise<void> {
+  const res = await gitlabPost(
+    `/projects/${projectId}/repository/commits`,
+    {
+      branch: 'main',
+      commit_message: 'chore: initial scaffold by Backstage',
+      actions: files.map(f => ({
+        action: 'create',
+        file_path: f.filePath,
+        content: Buffer.from(f.content).toString('base64'),
+        encoding: 'base64',
+      })),
+    },
+    token,
+    baseUrl,
+  );
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Failed to push skeleton files: ${res.status} ${err}`);
+  }
+}
+
+async function postMrComment(
+  mrIid: number,
+  message: string,
+  token: string,
+  baseUrl: string,
+  requestsProjectId: string,
+): Promise<void> {
+  await gitlabPost(
+    `/projects/${encodeURIComponent(requestsProjectId)}/merge_requests/${mrIid}/notes`,
+    { body: message },
+    token,
+    baseUrl,
+  );
+}
+
+async function readRequestFile(
+  mrIid: number,
+  token: string,
+  baseUrl: string,
+  requestsProjectId: string,
+): Promise<Record<string, string>> {
+  const res = await fetch(
+    `${baseUrl}/api/v4/projects/${encodeURIComponent(requestsProjectId)}/merge_requests/${mrIid}/changes`,
+    { headers: { 'PRIVATE-TOKEN': token } },
+  );
+  const data: { changes: Array<{ new_path: string }> } = await res.json();
+
+  const requestChange = data.changes.find(
+    c => c.new_path.startsWith('requests/') && c.new_path.endsWith('.yaml'),
+  );
+  if (!requestChange) throw new Error('No request file found in MR changes');
+
+  const fileRes = await fetch(
+    `${baseUrl}/api/v4/projects/${encodeURIComponent(requestsProjectId)}/repository/files/${encodeURIComponent(requestChange.new_path)}/raw?ref=main`,
+    { headers: { 'PRIVATE-TOKEN': token } },
+  );
+  const content = await fileRes.text();
+
+  const extract = (key: string): string => {
+    const match = content.match(new RegExp(`${key}:\\s*(.+)`));
+    return match ? match[1].trim().replace(/^["']|["']$/g, '') : '';
+  };
+
+  return {
+    repoName: extract('repoName'),
+    description: extract('description'),
+    ownerTeam: extract('ownerTeam'),
+    namespace: extract('namespace'),
+  };
+}
+
+// ── Plugin definition ──────────────────────────────────────────────────────────
+
+export const repoProvisionerPlugin = createBackendPlugin({
+  pluginId: 'repo-provisioner',
+  register(env) {
+    env.registerInit({
+      deps: {
+        logger: coreServices.logger,
+        config: coreServices.rootConfig,
+        httpRouter: coreServices.httpRouter,
+      },
+      async init({ logger, config, httpRouter }) {
+        const router = Router();
+        router.use(require('express').json());
+
+        // ── Read token via getConfigArray
+        // IMPORTANT: bracket notation integrations.gitlab[0].token is NOT
+        // supported by Backstage ConfigReader — always use getConfigArray()
+        const gitlabConfigs = config.getConfigArray('integrations.gitlab');
+        const gitlabToken = gitlabConfigs[0].getString('token');
+        const gitlabBaseUrl =
+          gitlabConfigs[0].getOptionalString('baseUrl') ?? 'https://gitlab.com';
+
+        const webhookSecret = config.getOptionalString(
+          'repoProvisioner.webhookSecret',
+        );
+        const requestsProjectId =
+          config.getOptionalString('repoProvisioner.requestsProjectId') ??
+          'cloudopsedge/repo-requests';
+
+        router.post('/webhook', async (req, res) => {
+          try {
+            // ── 1. Verify webhook secret ────────────────────────────────────
+            if (webhookSecret) {
+              const incoming = req.headers['x-gitlab-token'];
+              if (incoming !== webhookSecret) {
+                logger.warn('RepoProvisioner: Invalid webhook secret — rejected');
+                res.status(401).json({ error: 'Unauthorized' });
+                return;
+              }
+            }
+
+            const event = req.body;
+
+            // ── 2. Only handle MR merge events ──────────────────────────────
+            if (
+              event.object_kind !== 'merge_request' ||
+              event.object_attributes?.state !== 'merged' ||
+              event.project?.path_with_namespace !== requestsProjectId
+            ) {
+              res.status(200).json({ status: 'ignored' });
+              return;
+            }
+
+            const mrIid: number = event.object_attributes.iid;
+            logger.info(`RepoProvisioner: Processing merged MR !${mrIid}`);
+
+            // ── 3. Read request YAML from merged MR ─────────────────────────
+            const params = await readRequestFile(
+              mrIid,
+              gitlabToken,
+              gitlabBaseUrl,
+              requestsProjectId,
+            );
+
+            logger.info(
+              `RepoProvisioner: Creating repo ${params.namespace}/${params.repoName}`,
+            );
+
+            // ── 4. Create the GitLab repo ────────────────────────────────────
+            const newRepo = await createRepo(
+              params.repoName,
+              params.description,
+              params.namespace,
+              gitlabToken,
+              gitlabBaseUrl,
+            );
+
+            // ── 5. Push skeleton files ───────────────────────────────────────
+            await pushSkeletonFiles(
+              newRepo.id,
+              [
+                {
+                  filePath: 'README.md',
+                  content: generateReadme(params.repoName, params.description),
+                },
+                {
+                  filePath: 'catalog-info.yaml',
+                  content: generateCatalogInfo(
+                    params.repoName,
+                    params.description,
+                    params.ownerTeam,
+                  ),
+                },
+                {
+                  filePath: 'mkdocs.yml',
+                  content: generateMkdocs(params.repoName, params.description),
+                },
+              ],
+              gitlabToken,
+              gitlabBaseUrl,
+            );
+
+            logger.info(
+              `RepoProvisioner: Successfully created ${newRepo.web_url}`,
+            );
+
+            // ── 6. Comment result back on MR ─────────────────────────────────
+            await postMrComment(
+              mrIid,
+              `✅ **Repository created successfully**\n\n` +
+                `- **Repo URL:** ${newRepo.web_url}\n` +
+                `- **Catalog:** Will appear in Backstage on next discovery cycle\n` +
+                `- **Owner:** ${params.ownerTeam}`,
+              gitlabToken,
+              gitlabBaseUrl,
+              requestsProjectId,
+            );
+
+            res.status(200).json({
+              status: 'created',
+              repoUrl: newRepo.web_url,
+            });
+          } catch (err: unknown) {
+            const message =
+              err instanceof Error ? err.message : 'Unknown error';
+            logger.error(`RepoProvisioner: ${message}`);
+            res.status(500).json({ error: message });
+          }
+        });
+
+        httpRouter.use(router);
+
+        // ── REQUIRED: mark /webhook as unauthenticated
+        // Without this, Backstage auth middleware returns AuthenticationError
+        // before the request reaches the plugin handler
+        httpRouter.addAuthPolicy({
+          path: '/webhook',
+          allow: 'unauthenticated',
+        });
+
+        logger.info(
+          'RepoProvisioner: Webhook listening at /api/repo-provisioner/webhook',
+        );
+      },
+    });
+  },
+});
+```
+
+---
+
+## 7. Step 4 – Register Plugin in index.ts
+
+```typescript
+// packages/backend/src/index.ts
+
+import { createBackend } from '@backstage/backend-defaults';
+import { keycloakCustomModule } from './keycloakProvider';
+import { repoProvisionerPlugin } from './plugins/repoProvisioner';
+
+const backend = createBackend();
+
+backend.add(keycloakCustomModule);
+backend.add(
+  import('@backstage-community/plugin-catalog-backend-module-gitlab/alpha'),
+);
+backend.add(import('@immobiliarelabs/backstage-plugin-gitlab-backend'));
+
+// ✅ Scaffolder GitLab module — provides publish:gitlab:merge-request action
+backend.add(
+  import('@backstage/plugin-scaffolder-backend-module-gitlab'),
+);
+
+// ✅ Repo provisioner webhook plugin
+backend.add(repoProvisionerPlugin);
+
+backend.start();
+```
+
+---
+
+## 8. Step 5 – Install Scaffolder GitLab Module
+
+The `publish:gitlab:merge-request` action is NOT bundled with the base scaffolder. It comes from a separate module that must be installed and registered.
+
+```bash
+yarn --cwd packages/backend add @backstage/plugin-scaffolder-backend-module-gitlab
+```
+
+### Verify the action is registered after rebuild
+
+```bash
+TOKEN=$(curl -sk "https://localhost/api/auth/guest/refresh" | \
+  python3 -c "import sys,json; print(json.load(sys.stdin)['backstageIdentity']['token'])")
+
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  "https://localhost/api/scaffolder/v2/actions" \
+  | python3 -m json.tool | grep "publish:gitlab"
+
+# Expected:
+# "id": "publish:gitlab:merge-request"
+# "id": "publish:gitlab"
+# "id": "gitlab:repo:push"
+```
+
+### Check accepted inputs for any action
+
+```bash
+# Dump full schema for a specific action — most reliable way to check valid inputs
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  "https://localhost/api/scaffolder/v2/actions" \
+  | python3 -m json.tool | grep -A 50 '"publish:gitlab:merge-request"'
+```
+
+> 💡 **TIP:** Always use this API to check valid inputs for the installed version — plugin docs may reference fields that have been renamed or removed in newer versions.
+
+---
+
+## 9. Step 6 – app-config.yaml Changes
+
+Three changes required:
+
+**Change 1 — `Template` and `Location` must be in `catalog.rules`**
+
+```yaml
+# app-config.yaml
+catalog:
+  rules:
+    # ✅ Template and Location are required to display templates in the Create page
+    - allow: [Component, System, API, Resource, Location, Template, Domain, Group, User]
+```
+
+> ⚠️ **WARNING:** Without both `Template` AND `Location` in the allowlist, the template file is fetched but silently ignored — it will not appear in the Backstage Create page.
+
+**Change 2 — `repoProvisioner` as top-level key**
+
+```yaml
+# app-config.yaml
+
+integrations:
+  gitlab:
+    - host: gitlab.com
+      apiBaseUrl: https://gitlab.com/api/v4
+      token: ${GITLAB_TOKEN}
+  # ❌ Do NOT nest repoProvisioner under integrations
+
+# ✅ Top-level key
+repoProvisioner:
+  webhookSecret: ${REPO_PROVISIONER_WEBHOOK_SECRET}
+  requestsProjectId: cloudopsedge/repo-requests
+```
+
+**Change 3 — Template URL in `catalog.locations`**
+
+```yaml
+# app-config.yaml
+catalog:
+  locations:
+    # ✅ Must use /-/raw/main/ not /-/blob/main/
+    - type: url
+      target: https://gitlab.com/cloudopsedge/backstage-templates/-/raw/main/templates/create-gitlab-repo/template.yaml
+      rules:
+        - allow: [Template]
+
+    # keep existing
+    - type: file
+      target: ../../examples/entities.yaml
+    - type: file
+      target: ../../examples/template/template.yaml
+      rules:
+        - allow: [Template]
+    - type: file
+      target: ../../examples/org.yaml
+      rules:
+        - allow: [User, Group]
+```
+
+---
+
+## 10. Step 7 – app-config.production.yaml Changes
+
+> ⚠️ **CRITICAL:** In production mode `app-config.production.yaml` overrides `catalog.locations` completely. Any location only in `app-config.yaml` will NOT be loaded at runtime. All items below must be in the production config.
+
+```yaml
+# app-config.production.yaml — add all three blocks
+
+# ── 1. GitLab integration ────────────────────────────────────────────────────
+integrations:
+  gitlab:
+    - host: gitlab.com
+      apiBaseUrl: https://gitlab.com/api/v4
+      token: ${GITLAB_TOKEN}
+
+# ── 2. repoProvisioner — top-level, not under integrations ──────────────────
+repoProvisioner:
+  webhookSecret: ${REPO_PROVISIONER_WEBHOOK_SECRET}
+  requestsProjectId: cloudopsedge/repo-requests
+
+# ── 3. catalog.locations — template URL must be here ────────────────────────
+catalog:
+  locations:
+    # ✅ Template URL
+    - type: url
+      target: https://gitlab.com/cloudopsedge/backstage-templates/-/raw/main/templates/create-gitlab-repo/template.yaml
+      rules:
+        - allow: [Template]
+
+    # keep existing
+    - type: file
+      target: ./examples/entities.yaml
+    - type: file
+      target: ./examples/template/template.yaml
+      rules:
+        - allow: [Template]
+    - type: file
+      target: ./examples/org.yaml
+      rules:
+        - allow: [User, Group]
+```
+
+---
+
+## 11. Step 8 – CODEOWNERS in platform/repo-requests
+
+```
+# CODEOWNERS
+* @cloudopsedge/platform-team
+```
+
+Enable enforcement in GitLab:
+
+```
+platform/repo-requests →
+  Settings → Merge requests → Approvals →
+    ✅ Enable "Require approval from code owners"
+```
+
+---
+
+## 12. Step 9 – GitLab Webhook Setup
+
+Go to `cloudopsedge/repo-requests` → **Settings → Webhooks → Add new webhook**:
+
+| Field | Value |
+|---|---|
+| URL | `https://your-backstage-host/api/repo-provisioner/webhook` |
+| Secret token | Value generated in Step 10 |
+| Trigger | ✅ Merge request events only — uncheck everything else |
+| SSL verification | ✅ Enabled |
+
+---
+
+## 13. Step 10 – Generate Webhook Secret Token
+
+```bash
+# Recommended
+openssl rand -hex 32
+
+# Alternative
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Use the same value in two places:
+- GitLab webhook → Secret token field
+- Docker run → `-e REPO_PROVISIONER_WEBHOOK_SECRET=<value>`
+
+---
+
+## 14. Step 11 – Rebuild & Deploy
+
+```bash
+yarn install --immutable
+yarn tsc
+yarn build:backend
+
+docker rm -f backstage
+docker image build . -f packages/backend/Dockerfile --tag backstage:latest
+
+docker run -d \
+  --name backstage \
+  --network backstage-network \
+  -p 7007:7007 \
+  -e POSTGRES_HOST=backstage-postgres \
+  -e POSTGRES_PORT=5432 \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres123 \
+  -e POSTGRES_DB=backstage \
+  -e KEYCLOAK_CLIENT_SECRET=YOUR_KEYCLOAK_SECRET \
+  -e GITLAB_TOKEN=YOUR_GITLAB_TOKEN_WITH_API_SCOPE \
+  -e REPO_PROVISIONER_WEBHOOK_SECRET=YOUR_WEBHOOK_SECRET \
+  backstage:latest
+
+# Verify
+docker logs backstage | grep -i "repo-provisioner"
+# Expected:
+# RepoProvisioner: Webhook listening at /api/repo-provisioner/webhook
+```
+
+---
+
+## 15. Verification
+
+### Verify Plugin Started
+
+```bash
+docker logs backstage | grep -i "repo-provisioner"
+# Expected:
+# RepoProvisioner: Webhook listening at /api/repo-provisioner/webhook
+```
+
+### Verify Scaffolder Action is Registered
+
+```bash
+TOKEN=$(curl -sk "https://localhost/api/auth/guest/refresh" | \
+  python3 -c "import sys,json; print(json.load(sys.stdin)['backstageIdentity']['token'])")
+
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  "https://localhost/api/scaffolder/v2/actions" \
+  | python3 -m json.tool | grep "publish:gitlab"
+# Expected:
+# "id": "publish:gitlab:merge-request"
+```
+
+### Verify Template Is in Catalog
+
+```bash
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  "https://localhost/api/catalog/entities?filter=kind=Template" \
+  | python3 -m json.tool | grep '"name"'
+# Expected:
+# "name": "create-gitlab-repo"
+```
+
+### Verify Webhook Endpoint
+
+```bash
+# No secret — expect {"error": "Unauthorized"}
+curl -sk -X POST https://localhost/api/repo-provisioner/webhook \
+  -H "Content-Type: application/json" \
+  -d '{}' | python3 -m json.tool
+
+# With secret — expect {"status": "ignored"}
+curl -sk -X POST https://localhost/api/repo-provisioner/webhook \
+  -H "Content-Type: application/json" \
+  -H "X-Gitlab-Token: YOUR_WEBHOOK_SECRET" \
+  -d '{"object_kind": "ping"}' | python3 -m json.tool
+```
+
+---
+
+## 16. End-to-End Developer Flow
+
+```
+1. Developer opens Backstage
+   → Create → "Create GitLab Repository"
+
+2. Fills 3 fields:
+   → Repo Name:    payment-service
+   → Description:  Handles payment processing and refunds
+   → Owner Team:   group:default/infra-team  (picked from dropdown)
+
+3. Clicks "Create Repository"
+   → Scaffolder renders requests/payment-service.yaml
+   → Creates branch: request/payment-service in platform/repo-requests
+   → Opens MR: "feat: create repo payment-service"
+
+4. Developer sees output page:
+   → Link: "View Approval MR" → opens GitLab MR
+
+5. Platform team receives MR notification
+   → Reviews requests/payment-service.yaml diff
+   → Approves (CODEOWNERS enforced)
+   → Merges MR
+
+6. Webhook fires → Backstage processes in ~3–5 seconds:
+   → Creates https://gitlab.com/cloudopsedge/payment-service
+   → Pushes README.md, catalog-info.yaml, mkdocs.yml
+   → Posts comment on MR with repo URL
+
+7. MR gets auto-comment:
+   ✅ Repository created successfully
+   - Repo URL: https://gitlab.com/cloudopsedge/payment-service
+   - Catalog: Will appear in Backstage on next discovery cycle
+   - Owner: group:default/infra-team
+
+8. Next discovery cycle (or docker restart):
+   → GitLab discovery picks up catalog-info.yaml
+   → Component appears in Backstage catalog
+   → Docs tab ready (mkdocs.yml in place)
+   → CI/CD tab ready (gitlab annotation in catalog-info.yaml)
+```
+
+---
+
+## 17. Troubleshooting
+
+---
+
+### ❌ Template action 'publish:gitlab:merge-request' is not registered
+
+**Symptom:**
+```
+Template action with ID 'publish:gitlab:merge-request' is not registered
+```
+
+**Cause:** The scaffolder GitLab module is not installed or not registered in `index.ts`.
+
+**Fix:**
+```bash
+yarn --cwd packages/backend add @backstage/plugin-scaffolder-backend-module-gitlab
+```
+
+```typescript
+// index.ts
+backend.add(
+  import('@backstage/plugin-scaffolder-backend-module-gitlab'),
+);
+```
+
+Rebuild and restart after adding.
+
+---
+
+### ❌ InputError: instance is not allowed to have the additional property "commitMessage"
+
+**Symptom:**
+```
+InputError: Invalid input passed to action publish:gitlab:merge-request,
+instance is not allowed to have the additional property "commitMessage"
+```
+
+**Cause:** `commitMessage` is not a valid input for `publish:gitlab:merge-request` in the current version.
+
+**Fix — remove `commitMessage` from `template.yaml` and add `sourcePath` and `commitAction`:**
+```yaml
+# ❌ Remove
+commitMessage: "feat: add repo request for ${{ parameters.repoName }}"
+
+# ✅ Add these instead
+sourcePath: .
+commitAction: create
+```
+
+---
+
+### ❌ Wrong files committed to platform/repo-requests
+
+**Symptom:** MR diff shows `README.md`, `catalog-info.yaml`, `mkdocs.yml` instead of `requests/<repo-name>.yaml`.
+
+**Cause:** The skeleton folder contained the new repo files instead of just the request file.
+
+**Fix — skeleton folder must contain ONLY:**
+```
+skeleton/
+  └── requests/
+        └── ${{ values.repoName }}.yaml
+```
+
+Delete `README.md`, `catalog-info.yaml`, `mkdocs.yml`, `.gitkeep` from the skeleton root. Those files are generated by the webhook provisioner — not the scaffolder.
+
+---
+
+### ❌ 404 Project Not Found when creating MR
+
+**Symptom:**
+```
+GitbeakerRequestError: 404 Project Not Found
+```
+
+**Cause:** The `repoUrl` in `template.yaml` does not match the actual GitLab path of `platform/repo-requests`.
+
+**Fix — check the exact URL in GitLab and update `repoUrl`:**
+```yaml
+# Repo at gitlab.com/cloudopsedge/repo-requests
+repoUrl: gitlab.com?owner=cloudopsedge&repo=repo-requests
+
+# Repo at gitlab.com/cloudopsedge/platform/repo-requests (subgroup)
+repoUrl: gitlab.com?owner=cloudopsedge%2Fplatform&repo=repo-requests
+```
+
+> ⚠️ For subgroups use `%2F` as the separator — not a forward slash.
+
+---
+
+### ❌ insufficient_scope when creating MR branch
+
+**Symptom:**
+```
+GitbeakerRequestError: insufficient_scope - insufficient_scope
+```
+
+**Cause:** `GITLAB_TOKEN` has `read_api` scope only. Creating branches and MRs requires `api` scope.
+
+**Fix:**
+```
+GitLab → User Settings → Access Tokens → YOUR_TOKEN → Edit
+  → Scopes: ✅ api
+  → Save → copy new token value
+```
+
+Restart Backstage with the new token:
+```bash
+docker rm -f backstage
+docker run -d ... -e GITLAB_TOKEN=NEW_TOKEN_WITH_API_SCOPE ... backstage:latest
+```
+
+---
+
+### ❌ Template not appearing in Backstage Create page
+
+**Symptom:** No template visible under Create.
+
+**Diagnosis:**
+```bash
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  "https://localhost/api/catalog/entities?filter=kind=Template" \
+  | python3 -m json.tool | grep '"name"'
+```
+
+**Common causes:**
+
+| Cause | Fix |
+|---|---|
+| `Template` or `Location` missing from `catalog.rules` | Add both to the allowlist |
+| Template URL only in `app-config.yaml` not `app-config.production.yaml` | Add to production config `catalog.locations` |
+| URL uses `/-/blob/main/` | Change to `/-/raw/main/` |
+| Template YAML has syntax errors | Check `docker logs backstage \| grep -i "catalog\|error"` |
+
+**Correct URL format:**
+```
+✅ https://gitlab.com/group/repo/-/raw/main/path/to/template.yaml
+❌ https://gitlab.com/group/repo/-/blob/main/path/to/template.yaml
+```
+
+---
+
+### ❌ Missing required config value at 'gitlab.token'
+
+**Symptom:**
+```
+Error: Missing required config value at 'gitlab.token'
+```
+
+**Fix 1 — Use correct config path in repoProvisioner.ts:**
+```typescript
+// ❌ Wrong
+const token = config.getString('gitlab.token');
+
+// ✅ Correct
+const gitlabConfigs = config.getConfigArray('integrations.gitlab');
+const token = gitlabConfigs[0].getString('token');
+```
+
+**Fix 2 — Add to app-config.production.yaml:**
+```yaml
+integrations:
+  gitlab:
+    - host: gitlab.com
+      apiBaseUrl: https://gitlab.com/api/v4
+      token: ${GITLAB_TOKEN}
+```
+
+---
+
+### ❌ Invalid config key 'integrations.gitlab[0].token'
+
+**Symptom:**
+```
+TypeError: Invalid config key 'integrations.gitlab[0].token'
+```
+
+**Cause:** Backstage `ConfigReader` does not support array bracket notation.
+
+**Fix:**
+```typescript
+// ❌ Wrong
+const token = config.getString('integrations.gitlab[0].token');
+
+// ✅ Correct
+const gitlabConfigs = config.getConfigArray('integrations.gitlab');
+const token = gitlabConfigs[0].getString('token');
+```
+
+---
+
+### ❌ Webhook returns AuthenticationError: Missing credentials
+
+**Symptom:**
+```json
+{"error": {"name": "AuthenticationError", "message": "Missing credentials"}}
+```
+
+**Cause:** `addAuthPolicy` is missing — Backstage middleware blocks all unauthenticated requests before reaching the plugin.
+
+**Fix:**
+```typescript
+httpRouter.use(router);
+
+// ✅ Must add this
+httpRouter.addAuthPolicy({
+  path: '/webhook',
+  allow: 'unauthenticated',
+});
+```
+
+---
+
+### ❌ repoProvisioner config not found
+
+**Symptom:**
+```
+Error: Missing required config value at 'repoProvisioner.webhookSecret'
+```
+
+**Cause:** `repoProvisioner` is nested under `integrations` instead of top-level.
+
+**Fix:**
+```yaml
+# ❌ Wrong
+integrations:
+  gitlab:
+    - host: gitlab.com
+  repoProvisioner:
+    webhookSecret: ...
+
+# ✅ Correct
+integrations:
+  gitlab:
+    - host: gitlab.com
+
+repoProvisioner:
+  webhookSecret: ${REPO_PROVISIONER_WEBHOOK_SECRET}
+  requestsProjectId: cloudopsedge/repo-requests
+```
+
+---
+
+### ❌ ${{ '' | now }} renders literally in request YAML
+
+**Symptom:** Request YAML contains `requestedAt: "${{ '' | now }}"` literally.
+
+**Cause:** `now` is not a valid Nunjucks filter in Backstage scaffolder.
+
+**Fix:** Remove `requestedAt` from `template.yaml` fetch values and from the skeleton YAML entirely.
+
+---
+
+### ❌ OwnerPicker dropdown is empty
+
+**Cause:** Keycloak groups not yet synced.
+
+**Fix:**
+```bash
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  "https://localhost/api/catalog/entities?filter=kind=Group" \
+  | python3 -m json.tool | grep '"name"'
+```
+
+If empty, `docker restart backstage` to trigger an immediate sync.
+
+---
+
+### ❌ MR branch already exists
+
+**Symptom:**
+```
+branch named 'request/my-repo' already exists
+```
+
+**Fix — Option A:** Delete the old branch in GitLab manually.
+
+**Fix — Option B:** Add uniqueness to the branch name in `template.yaml`:
+```yaml
+branchName: request/${{ parameters.repoName }}-${{ parameters.repoName | truncate(6, true, '') }}
+```
+
+---
+
+### ❌ Component not appearing in catalog after repo creation
+
+**Cause:** GitLab discovery runs on schedule.
+
+**Speed up:**
+```bash
+docker restart backstage   # triggers immediate discovery on startup
+```
+
+---
+
+## 18. Quick Reference
+
+### Critical Rules Summary
+
+| Rule | Detail |
+|---|---|
+| `catalog.rules` | Must include both `Template` AND `Location` to show templates |
+| `repoProvisioner` placement | Top-level key — never nested under `integrations` |
+| `integrations.gitlab` in production | Must be in `app-config.production.yaml` |
+| Template URL in production | Must be in `app-config.production.yaml` `catalog.locations` |
+| Config array reads | Use `getConfigArray()` — bracket notation `[0]` not supported |
+| Webhook auth policy | Must call `addAuthPolicy({ path: '/webhook', allow: 'unauthenticated' })` |
+| Template URL format | `/-/raw/main/` not `/-/blob/main/` |
+| Skeleton folder | Only `requests/${{ values.repoName }}.yaml` — no other files |
+| `commitMessage` | Not a valid input for `publish:gitlab:merge-request` — remove it |
+| Nunjucks `now` filter | Does not exist in Backstage — remove `requestedAt` from template |
+| GitLab token scope | Must be `api` — not just `read_api` |
+| Subgroup in `repoUrl` | Use `%2F` separator e.g. `owner=cloudopsedge%2Fplatform` |
+
+### Scaffolder Action Valid Inputs
+
+```yaml
+# publish:gitlab:merge-request valid inputs (from /api/scaffolder/v2/actions)
+repoUrl: gitlab.com?owner=<group>&repo=<repo>
+title: "MR title"
+description: "MR description"
+branchName: feature/my-branch
+targetBranchName: main
+sourcePath: .
+commitAction: create | update | delete
+assignee: username
+removeSourceBranch: true | false
+targetPath: subdirectory/path
+```
+
+### Config Read Pattern
+
+```typescript
+// ✅ Only correct way to read GitLab token
+const gitlabConfigs = config.getConfigArray('integrations.gitlab');
+const gitlabToken = gitlabConfigs[0].getString('token');
+const gitlabBaseUrl = gitlabConfigs[0].getOptionalString('baseUrl') ?? 'https://gitlab.com';
+```
+
+### Generate Webhook Secret
+
+```bash
+openssl rand -hex 32
+```
+
+### Verify Actions Registered
+
+```bash
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  "https://localhost/api/scaffolder/v2/actions" \
+  | python3 -m json.tool | grep "publish:gitlab"
+```
+
+### Docker Run
+
+```bash
+docker run -d \
+  --name backstage \
+  --network backstage-network \
+  -p 7007:7007 \
+  -e POSTGRES_HOST=backstage-postgres \
+  -e POSTGRES_PORT=5432 \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres123 \
+  -e POSTGRES_DB=backstage \
+  -e KEYCLOAK_CLIENT_SECRET=YOUR_KEYCLOAK_SECRET \
+  -e GITLAB_TOKEN=YOUR_GITLAB_TOKEN \
+  -e REPO_PROVISIONER_WEBHOOK_SECRET=YOUR_WEBHOOK_SECRET \
+  backstage:latest
+```
+
+### File Checklist
+
+| File | Location | Purpose |
+|---|---|---|
+| `template.yaml` | `gitlab-templates-repo/templates/create-gitlab-repo/` | Scaffolder template |
+| `skeleton/requests/${{ values.repoName }}.yaml` | Same repo — only file in skeleton | Request YAML committed to MR |
+| `repoProvisioner.ts` | `packages/backend/src/plugins/` | Webhook listener + provisioner |
+| `index.ts` | `packages/backend/src/` | Plugin registration |
+| `CODEOWNERS` | `platform/repo-requests/` | Approval gate |
+
+---
+
+*Generated: March 2026 | Backstage v1.48.0 | Node.js v24.13.1 | GitLab SaaS | Version 1.2 — includes all troubleshooting from implementation session*
