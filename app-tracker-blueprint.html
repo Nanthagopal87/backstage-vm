@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>App Tracker — Blueprint</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8f7f4; color: #2c2c2a; font-size: 14px; line-height: 1.6; }
+.page { max-width: 1100px; margin: 0 auto; padding: 40px 24px; }
+h1 { font-size: 26px; font-weight: 500; margin-bottom: 4px; }
+.subtitle { font-size: 14px; color: #73726c; margin-bottom: 40px; }
+.section { margin-bottom: 48px; }
+.section-title { font-size: 12px; font-weight: 500; color: #73726c; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 0.5px solid #d3d1c7; }
+.card { background: #fff; border: 0.5px solid #d3d1c7; border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; }
+.card-title { font-size: 14px; font-weight: 500; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+
+/* badges */
+.badge { display: inline-block; font-size: 11px; font-weight: 500; padding: 2px 10px; border-radius: 20px; margin-bottom: 10px; }
+.badge-done { background: #eaf3de; color: #3b6d11; }
+.badge-next { background: #e6f1fb; color: #185fa5; }
+.badge-later { background: #f1efe8; color: #5f5e5a; }
+
+/* status pills */
+.status { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 500; }
+.s-done     { background: #eaf3de; color: #3b6d11; }
+.s-progress { background: #e6f1fb; color: #185fa5; }
+.s-blocked  { background: #fcebeb; color: #a32d2d; }
+.s-pending  { background: #f1efe8; color: #5f5e5a; }
+.s-na       { background: #f1efe8; color: #b4b2a9; }
+
+/* heatmap */
+.heatmap { width: 100%; border-collapse: collapse; font-size: 12px; }
+.heatmap th { padding: 6px 8px; text-align: center; font-size: 11px; font-weight: 500; color: #73726c; border-bottom: 0.5px solid #d3d1c7; }
+.heatmap th:first-child { text-align: left; min-width: 150px; }
+.heatmap td { padding: 4px 6px; text-align: center; border-bottom: 0.5px solid #f8f7f4; }
+.heatmap td:first-child { text-align: left; font-weight: 500; padding-left: 10px; }
+.heatmap .group-row td { background: #f8f7f4; font-size: 11px; font-weight: 500; color: #73726c; text-transform: uppercase; letter-spacing: .04em; padding: 4px 10px; }
+.cell { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 500; min-width: 54px; text-align: center; }
+.c-ns   { background: #f1efe8; color: #888780; }
+.c-ip   { background: #e6f1fb; color: #185fa5; }
+.c-done { background: #eaf3de; color: #3b6d11; }
+.c-blk  { background: #fcebeb; color: #a32d2d; }
+.c-na   { color: #d3d1c7; }
+
+/* role tree */
+.role-parent { display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: #f8f7f4; border: 0.5px solid #d3d1c7; border-radius: 8px; font-weight: 500; font-size: 13px; margin-bottom: 4px; }
+.role-children { padding-left: 20px; margin-bottom: 6px; }
+.role-child { display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: #fff; border: 0.5px solid #d3d1c7; border-radius: 6px; font-size: 12px; margin-bottom: 3px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.role-kc { font-size: 10px; color: #888780; margin-left: auto; font-family: monospace; }
+
+/* matrix */
+.matrix { width: 100%; border-collapse: collapse; font-size: 12px; }
+.matrix th { padding: 6px 4px; text-align: center; font-size: 11px; font-weight: 500; color: #73726c; border-bottom: 0.5px solid #d3d1c7; }
+.matrix th:first-child { text-align: left; }
+.matrix td { padding: 5px 4px; text-align: center; border-bottom: 0.5px solid #f8f7f4; font-size: 12px; }
+.matrix td:first-child { text-align: left; }
+.matrix .mpar td { background: #f8f7f4; font-style: italic; color: #73726c; font-size: 11px; }
+.mc { color: #3b6d11; }
+.mx { color: #d3d1c7; }
+
+/* kc groups */
+.kc { display: inline-flex; align-items: center; font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 20px; margin: 2px; }
+.kc-full     { background: #f1efe8; color: #5f5e5a; border: 0.5px solid #d3d1c7; }
+.kc-approval { background: #faeeda; color: #854f0b; border: 0.5px solid #fac775; }
+
+/* sign-off panel */
+.sf-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 0.5px solid #f8f7f4; font-size: 12px; }
+.sf-row:last-child { border-bottom: none; }
+.sf-role { width: 150px; font-weight: 500; flex-shrink: 0; }
+.sf-name { flex: 1; color: #444441; }
+.sf-date { width: 90px; font-size: 11px; color: #73726c; }
+.sf-indent { padding-left: 16px; }
+.sf-section { font-size: 10px; font-weight: 500; color: #73726c; text-transform: uppercase; letter-spacing: .06em; padding: 6px 0 2px; }
+
+/* trigger */
+.trigger { display: flex; gap: 12px; padding: 10px 0; border-bottom: 0.5px solid #f8f7f4; }
+.trigger:last-child { border-bottom: none; }
+.t-num { width: 24px; height: 24px; border-radius: 50%; background: #f1efe8; color: #5f5e5a; font-size: 11px; font-weight: 500; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+.t-title { font-size: 13px; font-weight: 500; margin-bottom: 2px; }
+.t-desc { font-size: 12px; color: #73726c; margin-bottom: 4px; }
+.channels { display: flex; gap: 5px; flex-wrap: wrap; }
+.ch { font-size: 11px; padding: 2px 7px; border-radius: 20px; font-weight: 500; }
+.ch-bs { background: #eeedfe; color: #534ab7; }
+.ch-gl { background: #faeeda; color: #854f0b; }
+.ch-ms { background: #e6f1fb; color: #185fa5; }
+
+/* phase cards */
+.phase { background: #fff; border: 0.5px solid #d3d1c7; border-radius: 12px; padding: 18px; }
+.p-num { font-size: 11px; color: #888780; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+.p-title { font-size: 14px; font-weight: 500; margin-bottom: 10px; }
+.p-items { list-style: none; }
+.p-items li { font-size: 12px; color: #444441; padding: 2px 0; display: flex; gap: 8px; align-items: flex-start; }
+.p-items li::before { content: '—'; color: #b4b2a9; flex-shrink: 0; }
+
+/* data table */
+.dt { width: 100%; border-collapse: collapse; font-size: 12px; }
+.dt th { text-align: left; padding: 8px 10px; font-size: 11px; font-weight: 500; color: #73726c; background: #f8f7f4; border-bottom: 0.5px solid #d3d1c7; }
+.dt td { padding: 8px 10px; border-bottom: 0.5px solid #f8f7f4; }
+.dt tr:last-child td { border-bottom: none; }
+
+@media (max-width: 700px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <h1>App Tracker — Implementation Blueprint</h1>
+  <p class="subtitle">Backstage · PostgreSQL · Keycloak · GitLab · MS Teams &nbsp;|&nbsp; March 2026 · v1.1</p>
+
+  <!-- 1. Overview -->
+  <div class="section">
+    <div class="section-title">1. Overview</div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:10px">Purpose</div>
+        <p style="font-size:13px;color:#444441">Replaces manual PMO coordination (email, Excel) with a structured, automated, org-wide delivery governance platform. Single source of truth for all service deployments across environments. Built for PMO team as primary users.</p>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:10px">Core concepts</div>
+        <div style="font-size:13px;display:flex;flex-direction:column;gap:5px">
+          <div><strong>Entry</strong> — one service + env + version (upsert key)</div>
+          <div><strong>Sign-off</strong> — approval from a role's assigned EM/lead</div>
+          <div><strong>Auto-status</strong> — derived from sign-offs automatically</div>
+          <div><strong>Display status</strong> — manual override ?? auto-status</div>
+          <div><strong>Scope</strong> — global or app-family-group (for Dev roles)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px">Environments &amp; status values</div>
+      <div style="display:flex;align-items:center;gap:0;font-size:13px;margin-bottom:16px">
+        <div style="padding:7px 18px;background:#f1efe8;border-radius:8px 0 0 8px;border:0.5px solid #d3d1c7;font-weight:500">dev</div>
+        <div style="padding:7px 8px;color:#b4b2a9">→</div>
+        <div style="padding:7px 18px;background:#f1efe8;border:0.5px solid #d3d1c7;font-weight:500">uat</div>
+        <div style="padding:7px 8px;color:#b4b2a9">→</div>
+        <div style="padding:7px 18px;background:#f1efe8;border:0.5px solid #d3d1c7;font-weight:500">stg</div>
+        <div style="padding:7px 8px;color:#b4b2a9">→</div>
+        <div style="padding:7px 18px;background:#f1efe8;border:0.5px solid #d3d1c7;font-weight:500">box</div>
+        <div style="padding:7px 8px;color:#b4b2a9">→</div>
+        <div style="padding:7px 18px;background:#eaf3de;border-radius:0 8px 8px 0;border:0.5px solid #c0dd97;font-weight:500;color:#3b6d11">prd</div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12px">
+        <div><span class="cell c-ns">Not Started</span> <span style="color:#73726c">no sign-offs</span></div>
+        <div><span class="cell c-ip">In Progress</span> <span style="color:#73726c">some approved</span></div>
+        <div><span class="cell c-done">Delivered</span> <span style="color:#73726c">all approved</span></div>
+        <div><span class="cell c-blk">Blocked</span> <span style="color:#73726c">any rejected</span></div>
+        <div><span class="cell" style="background:#faeeda;color:#854f0b">Rolled Back</span> <span style="color:#73726c">manual override</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Heatmap -->
+  <div class="section">
+    <div class="section-title">2. Status Heatmap — Tab 1</div>
+    <div class="card" style="overflow-x:auto">
+      <table class="heatmap">
+        <thead><tr><th>Service</th><th>dev</th><th>uat</th><th>stg</th><th>box</th><th>prd</th></tr></thead>
+        <tbody>
+          <tr class="group-row"><td colspan="6">FinTech-Group</td></tr>
+          <tr><td>payment-service</td><td><span class="cell c-done">Delivered</span></td><td><span class="cell c-ip">In Prog</span></td><td><span class="cell c-ns">Not Strtd</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td></tr>
+          <tr><td>fraud-detection</td><td><span class="cell c-ip">In Prog</span></td><td><span class="cell c-blk">Blocked</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td></tr>
+          <tr><td>auth-service</td><td><span class="cell c-done">Delivered</span></td><td><span class="cell c-ip">In Prog</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td></tr>
+          <tr><td>customer-portal</td><td><span class="cell c-ns">Not Strtd</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td></tr>
+          <tr class="group-row"><td colspan="6">InsureTech-Group</td></tr>
+          <tr><td>claims-processor</td><td><span class="cell c-ip">In Prog</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td></tr>
+          <tr><td>policy-manager</td><td><span class="cell c-ns">Not Strtd</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td></tr>
+          <tr class="group-row"><td colspan="6">Platform-Group</td></tr>
+          <tr><td>grafana</td><td><span class="cell c-done">Delivered</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td></tr>
+          <tr><td>gitlab</td><td><span class="cell c-ip">In Prog</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td><td><span class="c-na">—</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 3. Sign-off panel -->
+  <div class="section">
+    <div class="section-title">3. Sign-off Panel — payment-service / dev / v1.2.0</div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:0.5px solid #f8f7f4">
+        <div>
+          <div style="font-size:15px;font-weight:500">payment-service</div>
+          <div style="font-size:12px;color:#73726c">dev &nbsp;·&nbsp; v1.2.0 &nbsp;·&nbsp; <strong style="color:#185fa5">High</strong> &nbsp;·&nbsp; FinTech-Group</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:11px;color:#73726c;margin-bottom:3px">Auto status</div>
+          <span class="status s-progress">In Progress</span>
+        </div>
+      </div>
+
+      <div class="sf-row"><div class="sf-role">Product Team</div><div class="sf-name">John B</div><span class="status s-done">Approved</span><div class="sf-date">23 Mar 09:15</div></div>
+
+      <div class="sf-section">Dev</div>
+      <div class="sf-row sf-indent"><div class="sf-role">Application Arch</div><div class="sf-name">Raj K</div><span class="status s-done">Approved</span><div class="sf-date">23 Mar 10:00</div></div>
+      <div class="sf-row sf-indent"><div class="sf-role">Dev - FinTech</div><div class="sf-name">Raj K</div><span class="status s-progress">Pending</span><div class="sf-date">—</div></div>
+      <div class="sf-row sf-indent"><div class="sf-role">ML Engineer</div><div class="sf-name">—</div><span class="status s-na">N/A</span><div class="sf-date">—</div></div>
+
+      <div class="sf-row"><div class="sf-role">QA</div><div class="sf-name">—</div><span class="status s-na">N/A (dev)</span><div class="sf-date">—</div></div>
+      <div class="sf-row"><div class="sf-role">Risk &amp; Compliance</div><div class="sf-name">—</div><span class="status s-na">N/A (dev)</span><div class="sf-date">—</div></div>
+
+      <div class="sf-section">Security</div>
+      <div class="sf-row sf-indent"><div class="sf-role">Red / Blue / Info Sec</div><div class="sf-name">—</div><span class="status s-na">N/A (dev)</span><div class="sf-date">—</div></div>
+
+      <div class="sf-section">Platform Team</div>
+      <div class="sf-row sf-indent"><div class="sf-role">Platform Arch</div><div class="sf-name">Nantha P</div><span class="status s-done">Approved</span><div class="sf-date">23 Mar 11:30</div></div>
+      <div class="sf-row sf-indent"><div class="sf-role">Infra</div><div class="sf-name">Arun K</div><span class="status s-progress">Pending</span><div class="sf-date">—</div></div>
+      <div class="sf-row sf-indent"><div class="sf-role">DevOps</div><div class="sf-name">—</div><span class="status s-progress">Pending</span><div class="sf-date">—</div></div>
+      <div class="sf-row sf-indent"><div class="sf-role">SRE</div><div class="sf-name">—</div><span class="status s-na">N/A (dev)</span><div class="sf-date">—</div></div>
+    </div>
+  </div>
+
+  <!-- 4. Role hierarchy + matrix -->
+  <div class="section">
+    <div class="section-title">4. Role Hierarchy &amp; Env Matrix</div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px">18 roles — sign-off chain</div>
+        <div class="role-parent"><div class="dot" style="background:#1d9e75"></div>Product Team<span class="role-kc">product-managers</span></div>
+        <div class="role-parent" style="margin-top:6px"><div class="dot" style="background:#534ab7"></div>Dev <span style="font-size:11px;color:#888780;font-weight:400">parent</span></div>
+        <div class="role-children">
+          <div class="role-child"><div class="dot" style="background:#7f77dd"></div>Application Arch<span class="role-kc">application-arch-leads</span></div>
+          <div class="role-child"><div class="dot" style="background:#7f77dd"></div>Dev - FinTech<span class="role-kc">dev-fintech-em</span></div>
+          <div class="role-child"><div class="dot" style="background:#7f77dd"></div>Dev - InsureTech<span class="role-kc">dev-insuretech-em</span></div>
+          <div class="role-child"><div class="dot" style="background:#afa9ec"></div>ML Engineer <span style="font-size:10px;color:#888780">(off by default)</span><span class="role-kc">ml-leads</span></div>
+          <div class="role-child"><div class="dot" style="background:#afa9ec"></div>Data Engineer <span style="font-size:10px;color:#888780">(off by default)</span><span class="role-kc">data-leads</span></div>
+        </div>
+        <div class="role-parent"><div class="dot" style="background:#1d9e75"></div>QA<span class="role-kc">qa-leads</span></div>
+        <div class="role-parent" style="margin-top:4px"><div class="dot" style="background:#ba7517"></div>Risk &amp; Compliance <span style="font-size:10px;color:#888780">prd only</span><span class="role-kc">rc-leads</span></div>
+        <div class="role-parent" style="margin-top:6px"><div class="dot" style="background:#a32d2d"></div>Security <span style="font-size:11px;color:#888780;font-weight:400">parent</span></div>
+        <div class="role-children">
+          <div class="role-child"><div class="dot" style="background:#e24b4a"></div>Red Team<span class="role-kc">red-team-leads</span></div>
+          <div class="role-child"><div class="dot" style="background:#e24b4a"></div>Blue Team<span class="role-kc">blue-team-leads</span></div>
+          <div class="role-child"><div class="dot" style="background:#e24b4a"></div>Info Sec<span class="role-kc">info-sec-leads</span></div>
+        </div>
+        <div class="role-parent" style="margin-top:6px"><div class="dot" style="background:#185fa5"></div>Platform Team <span style="font-size:11px;color:#888780;font-weight:400">parent</span></div>
+        <div class="role-children">
+          <div class="role-child"><div class="dot" style="background:#378add"></div>Platform Arch<span class="role-kc">platform-arch-leads</span></div>
+          <div class="role-child"><div class="dot" style="background:#378add"></div>Infra<span class="role-kc">infra-em</span></div>
+          <div class="role-child"><div class="dot" style="background:#378add"></div>DevOps<span class="role-kc">devops-em</span></div>
+          <div class="role-child"><div class="dot" style="background:#378add"></div>SRE<span class="role-kc">sre-em</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px">Env requirement matrix</div>
+        <table class="matrix">
+          <thead><tr><th>Role</th><th>dev</th><th>uat</th><th>stg</th><th>box</th><th>prd</th></tr></thead>
+          <tbody>
+            <tr><td>Product Team</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td></tr>
+            <tr class="mpar"><td colspan="6" style="padding-left:4px">Dev (parent — derived)</td></tr>
+            <tr><td style="padding-left:14px;font-size:11px">App Arch</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td></tr>
+            <tr><td style="padding-left:14px;font-size:11px">Dev - FinTech</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td></tr>
+            <tr><td style="padding-left:14px;font-size:11px">Dev - InsureTech</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td></tr>
+            <tr><td style="padding-left:14px;font-size:11px">ML / Data Engineer</td><td class="mx">—</td><td class="mx">—</td><td class="mx">—</td><td class="mx">—</td><td class="mx">—</td></tr>
+            <tr><td>QA</td><td class="mx">—</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td></tr>
+            <tr><td>Risk &amp; Compliance</td><td class="mx">—</td><td class="mx">—</td><td class="mx">—</td><td class="mx">—</td><td class="mc">✓</td></tr>
+            <tr class="mpar"><td colspan="6" style="padding-left:4px">Security (parent — derived)</td></tr>
+            <tr><td style="padding-left:14px;font-size:11px">Red / Blue / Info Sec</td><td class="mx">—</td><td class="mx">—</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td></tr>
+            <tr class="mpar"><td colspan="6" style="padding-left:4px">Platform Team (parent — derived)</td></tr>
+            <tr><td style="padding-left:14px;font-size:11px">Platform Arch</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td></tr>
+            <tr><td style="padding-left:14px;font-size:11px">Infra / DevOps</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td></tr>
+            <tr><td style="padding-left:14px;font-size:11px">SRE</td><td class="mx">—</td><td class="mx">—</td><td class="mc">✓</td><td class="mc">✓</td><td class="mc">✓</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. Keycloak -->
+  <div class="section">
+    <div class="section-title">5. Keycloak Group Structure</div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px">Full team groups (catalog ownership)</div>
+        <div class="role-parent"><div class="dot" style="background:#185fa5"></div>platform-team <span style="font-size:10px;color:#888780">renamed from platform-common-team</span></div>
+        <div class="role-children">
+          <div class="role-child">infra-team <span style="font-size:10px;color:#888780">existing</span></div>
+          <div class="role-child">devops-team <span style="font-size:10px;color:#888780">existing</span></div>
+          <div class="role-child">sre-team <span style="font-size:10px;color:#888780">existing</span></div>
+          <div class="role-child">platform-arch-team <span style="font-size:10px;color:#888780">new</span></div>
+        </div>
+        <div class="role-parent"><div class="dot" style="background:#a32d2d"></div>security-team <span style="font-size:10px;color:#888780">new parent</span></div>
+        <div class="role-children">
+          <div class="role-child">red-team</div>
+          <div class="role-child">blue-team</div>
+          <div class="role-child">info-sec</div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;margin-top:8px">
+          <span class="kc kc-full">product-team</span>
+          <span class="kc kc-full">application-arch-team</span>
+          <span class="kc kc-full">dev-fintech-team</span>
+          <span class="kc kc-full">dev-insuretech-team</span>
+          <span class="kc kc-full">ml-team</span>
+          <span class="kc kc-full">data-team</span>
+          <span class="kc kc-full">qa-team</span>
+          <span class="kc kc-full">risk-compliance-team</span>
+          <span class="kc kc-full">pmo-team</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:6px">Approval groups (sign-off picker)</div>
+        <p style="font-size:12px;color:#73726c;margin-bottom:10px">Managers &amp; leads only — these appear in the assignee picker</p>
+        <div style="display:flex;flex-wrap:wrap">
+          <span class="kc kc-approval">product-managers</span>
+          <span class="kc kc-approval">application-arch-leads</span>
+          <span class="kc kc-approval">dev-fintech-em</span>
+          <span class="kc kc-approval">dev-insuretech-em</span>
+          <span class="kc kc-approval">ml-leads</span>
+          <span class="kc kc-approval">data-leads</span>
+          <span class="kc kc-approval">qa-leads</span>
+          <span class="kc kc-approval">rc-leads</span>
+          <span class="kc kc-approval">red-team-leads</span>
+          <span class="kc kc-approval">blue-team-leads</span>
+          <span class="kc kc-approval">info-sec-leads</span>
+          <span class="kc kc-approval">platform-arch-leads</span>
+          <span class="kc kc-approval">infra-em</span>
+          <span class="kc kc-approval">devops-em</span>
+          <span class="kc kc-approval">sre-em</span>
+        </div>
+        <div style="margin-top:14px;padding-top:12px;border-top:0.5px solid #f1efe8">
+          <div style="font-size:12px;font-weight:500;margin-bottom:6px">Future — Phase 5</div>
+          <span class="kc kc-full">pmo-leads</span>
+          <span style="font-size:11px;color:#73726c;margin-left:6px">PMO governance sign-off, prd only</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. DB Schema -->
+  <div class="section">
+    <div class="section-title">6. Database Schema (5 tables + migrations)</div>
+    <div class="grid-2">
+      <div>
+        <div class="card">
+          <div class="card-title" style="margin-bottom:8px">app_tracker_roles</div>
+          <div style="font-size:12px;font-family:monospace;line-height:2;color:#444441">
+            id · role_name · parent_role_id<br>
+            scope · scope_value<br>
+            <span style="background:#faeeda;padding:0 4px;border-radius:3px">keycloak_group</span> ← migration 002<br>
+            sort_order · created_at · updated_at
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title" style="margin-bottom:8px">app_tracker_role_env_config</div>
+          <div style="font-size:12px;font-family:monospace;line-height:2;color:#444441">
+            id · role_id · env · required<br>
+            UNIQUE(role_id, env)
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title" style="margin-bottom:8px">app_tracker_import_log</div>
+          <div style="font-size:12px;font-family:monospace;line-height:2;color:#444441">
+            id · imported_by · file_name<br>
+            row_count · inserted · updated · failed<br>
+            status · error_message · imported_at
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <div class="card-title" style="margin-bottom:8px">app_tracker_entries</div>
+          <div style="font-size:12px;font-family:monospace;line-height:2;color:#444441">
+            id · category · sub_category<br>
+            app_family_group · app_family · app<br>
+            business_owner · tech_owner<br>
+            dev_team · platform_contact<br>
+            env · release_version · priority<br>
+            start_date · target_date · delivered_date<br>
+            manual_status · auto_status · remarks<br>
+            <span style="background:#e6f1fb;padding:0 4px;border-radius:3px">gitlab_issue_iid · gitlab_issue_url</span> ← 003<br>
+            UNIQUE(app, env, release_version)
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title" style="margin-bottom:8px">app_tracker_signoffs</div>
+          <div style="font-size:12px;font-family:monospace;line-height:2;color:#444441">
+            id · entry_id · role_id<br>
+            assignee_name · assignee_email<br>
+            status · signoff_date · remarks<br>
+            <span style="background:#e6f1fb;padding:0 4px;border-radius:3px">picked_up_at · picked_up_by</span> ← 003<br>
+            <span style="background:#e6f1fb;padding:0 4px;border-radius:3px">closed_at · duration_mins</span> ← 003<br>
+            created_at · updated_at
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title" style="margin-bottom:10px">Migrations</div>
+      <table class="dt">
+        <thead><tr><th>File</th><th>What it does</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td style="font-family:monospace">001_create_app_tracker_tables.sql</td><td>Creates all 5 tables + indexes</td><td><span class="status s-done">Applied</span></td></tr>
+          <tr><td style="font-family:monospace">002_add_keycloak_group_to_roles.sql</td><td>Adds keycloak_group column, re-seeds 18 roles + env-config</td><td><span class="status s-done">Applied</span></td></tr>
+          <tr><td style="font-family:monospace">003_add_phase3_tracking.sql</td><td>Adds time tracking + GitLab issue columns</td><td><span class="status s-progress">Pending</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 7. Phase 3 notifications -->
+  <div class="section">
+    <div class="section-title">7. Phase 3 — Notifications &amp; Audit Trail</div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px">Notification triggers</div>
+        <div class="trigger">
+          <div class="t-num">1</div>
+          <div><div class="t-title">Entry created</div><div class="t-desc">New delivery tracking started</div>
+          <div class="channels"><span class="ch ch-gl">GitLab issue created</span></div></div>
+        </div>
+        <div class="trigger">
+          <div class="t-num">2</div>
+          <div><div class="t-title">Assignee added</div><div class="t-desc">Sign-off action required</div>
+          <div class="channels"><span class="ch ch-bs">Backstage bell</span><span class="ch ch-gl">GitLab comment</span></div></div>
+        </div>
+        <div class="trigger">
+          <div class="t-num">3</div>
+          <div><div class="t-title">Sign-off approved</div><div class="t-desc">Role approved by assignee</div>
+          <div class="channels"><span class="ch ch-gl">GitLab comment</span></div></div>
+        </div>
+        <div class="trigger">
+          <div class="t-num">4</div>
+          <div><div class="t-title">Rejected / Blocked</div><div class="t-desc">Entry blocked — action required</div>
+          <div class="channels"><span class="ch ch-bs">Backstage bell</span><span class="ch ch-gl">GitLab comment + label</span></div></div>
+        </div>
+        <div class="trigger">
+          <div class="t-num">5</div>
+          <div><div class="t-title">Delivered</div><div class="t-desc">All sign-offs approved</div>
+          <div class="channels"><span class="ch ch-bs">Backstage bell</span><span class="ch ch-gl">GitLab issue auto-closed</span></div></div>
+        </div>
+        <div style="margin-top:14px;padding-top:12px;border-top:0.5px solid #f8f7f4">
+          <div style="font-size:12px;font-weight:500;margin-bottom:4px">MS Teams — when PMO ready</div>
+          <div style="font-size:12px;color:#73726c">One channel per service. PMO creates channels + provides webhook URLs. Platform team enters URL in entry.</div>
+          <div class="channels" style="margin-top:6px">
+            <span class="ch ch-ms">#payment-service</span>
+            <span class="ch ch-ms">#fraud-detection</span>
+            <span class="ch ch-ms">#auth-service</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px">Sign-off time tracking</div>
+        <div style="font-size:13px;color:#444441;margin-bottom:12px">Two new columns on <code style="background:#f1efe8;padding:1px 5px;border-radius:3px">app_tracker_signoffs</code>:</div>
+        <div style="font-size:12px;display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
+          <div style="background:#f8f7f4;padding:10px 12px;border-radius:8px;border:0.5px solid #d3d1c7">
+            <strong>picked_up_at</strong> — when assignee clicks Pick Up button<br>
+            <span style="color:#73726c">OR auto-set when assignee first opens sign-off panel</span>
+          </div>
+          <div style="background:#f8f7f4;padding:10px 12px;border-radius:8px;border:0.5px solid #d3d1c7">
+            <strong>closed_at</strong> — auto-set when status → Approved / Rejected<br>
+            <strong>duration_mins</strong> — closed_at − picked_up_at in minutes
+          </div>
+        </div>
+
+        <div class="card-title" style="margin-bottom:10px">GitLab Issues repo</div>
+        <div style="font-size:12px;color:#444441;margin-bottom:8px">Dedicated repo: <code style="background:#f1efe8;padding:1px 5px;border-radius:3px">cloudopsedge/app-tracker-issues</code></div>
+        <div style="background:#f8f7f4;border-radius:8px;padding:10px 12px;font-size:11px;font-family:monospace;line-height:1.8;border:0.5px solid #d3d1c7">
+          <strong>[App Tracker] payment-service / stg / v1.2.0</strong><br>
+          Labels: In Progress · High · FinTech-Group<br><br>
+          | Field | Value |<br>
+          | Service | payment-service |<br>
+          | Tech Owner | Raj K |<br>
+          | ...<br><br>
+          ## Sign-off chain (auto-generated)<br><br>
+          <span style="color:#3b6d11">→ Comments added on each event</span><br>
+          <span style="color:#3b6d11">→ Issue auto-closed on Delivered</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. Stakeholders -->
+  <div class="section">
+    <div class="section-title">8. Stakeholder Access Matrix</div>
+    <div class="card" style="overflow-x:auto">
+      <table class="dt">
+        <thead><tr><th>Team</th><th>Keycloak Group</th><th>Create Entries</th><th>Sign-off</th><th>Configure Roles</th><th>View All</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Platform Team</strong></td><td><span class="kc kc-full" style="font-size:11px">platform-team</span></td><td><span class="status s-done">Yes</span></td><td><span class="status s-done">Yes</span></td><td><span class="status s-done">Yes</span></td><td><span class="status s-done">Yes</span></td><td style="font-size:11px;color:#73726c">Admin — full access</td></tr>
+          <tr><td><strong>PMO Team</strong></td><td><span class="kc kc-full" style="font-size:11px">pmo-team</span></td><td><span class="status s-done">Yes</span></td><td><span class="status s-pending">Phase 5</span></td><td><span class="status s-pending">No</span></td><td><span class="status s-done">Yes</span></td><td style="font-size:11px;color:#73726c">E2E coordinator</td></tr>
+          <tr><td><strong>EMs / Leads</strong></td><td><span class="kc kc-approval" style="font-size:11px">*-em / *-leads</span></td><td><span class="status s-pending">No</span></td><td><span class="status s-done">Own role only</span></td><td><span class="status s-pending">No</span></td><td><span class="status s-progress">Limited</span></td><td style="font-size:11px;color:#73726c">Approve/reject only</td></tr>
+          <tr><td><strong>Viewers</strong></td><td><span class="kc kc-full" style="font-size:11px">backstage-viewers</span></td><td><span class="status s-pending">No</span></td><td><span class="status s-pending">No</span></td><td><span class="status s-pending">No</span></td><td><span class="status s-done">Read-only</span></td><td style="font-size:11px;color:#73726c">Heatmap visibility</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 9. Implementation Phases -->
+  <div class="section">
+    <div class="section-title">9. Implementation Phases</div>
+    <div class="grid-3">
+      <div class="phase">
+        <div class="badge badge-done">✅ Complete</div>
+        <div class="p-num">Phase 1</div>
+        <div class="p-title">Core App Tracker</div>
+        <ul class="p-items">
+          <li>Status heatmap (app × env)</li>
+          <li>Sign-off panel + role hierarchy</li>
+          <li>Keycloak group-filtered picker</li>
+          <li>18 roles + env-config matrix</li>
+          <li>CSV/XLSX import + audit log</li>
+          <li>Configure Roles tab</li>
+          <li>PostgreSQL persistence</li>
+          <li>Sample data (13 services)</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="badge badge-later">⏳ Pending</div>
+        <div class="p-num">Phase 2</div>
+        <div class="p-title">Auth &amp; RBAC</div>
+        <ul class="p-items">
+          <li>Azure AD authentication</li>
+          <li>RBAC via Keycloak group attributes</li>
+          <li>Platform team → admin</li>
+          <li>PMO → coordinator access</li>
+          <li>EMs → approve own sign-offs</li>
+          <li>Viewers → read-only</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="badge badge-next">🔧 In Progress</div>
+        <div class="p-num">Phase 3</div>
+        <div class="p-title">Notifications &amp; Audit</div>
+        <ul class="p-items">
+          <li>Sign-off time tracking</li>
+          <li>Pick Up button (manual + auto)</li>
+          <li>Backstage in-app notifications</li>
+          <li>GitLab Issues audit trail</li>
+          <li>Auto-close on Delivered</li>
+          <li>MS Teams (when PMO ready)</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="badge badge-later">⏳ Pending</div>
+        <div class="p-num">Phase 4</div>
+        <div class="p-title">Catalog Integration</div>
+        <ul class="p-items">
+          <li>org/service-group annotation</li>
+          <li>Auto-suggest assignees from catalog</li>
+          <li>PRD/HLD links (Confluence)</li>
+          <li>draw.io architecture diagrams</li>
+          <li>SharePoint PMO report links</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="badge badge-later">⏳ Pending</div>
+        <div class="p-num">Phase 5</div>
+        <div class="p-title">PMO Sign-off</div>
+        <ul class="p-items">
+          <li>pmo-leads Keycloak group</li>
+          <li>PMO Governance role (prd only)</li>
+          <li>Risk sign-off for PMO</li>
+          <li>When product stabilizes</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="badge badge-later">⏳ Pending</div>
+        <div class="p-num">Phase 6</div>
+        <div class="p-title">Analytics Tab</div>
+        <ul class="p-items">
+          <li>5th tab — delivery KPIs</li>
+          <li>Progress by app-family-group</li>
+          <li>Blocked services dashboard</li>
+          <li>Sign-off bottleneck analysis</li>
+          <li>PDF/CSV export for executives</li>
+          <li>Replaces Power BI + SharePoint</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 10. Documentation -->
+  <div class="section">
+    <div class="section-title">10. Documentation Strategy (Phase 4)</div>
+    <div class="grid-3">
+      <div class="card">
+        <div class="card-title">PRD</div>
+        <div style="font-size:12px;color:#73726c;margin-top:4px">Confluence</div>
+        <div style="font-size:12px;color:#444441;margin-top:8px">Written by Product Team. Approval workflow in Confluence. Linked from catalog-info.yaml links section.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">HLD / Architecture</div>
+        <div style="font-size:12px;color:#73726c;margin-top:4px">Confluence + draw.io</div>
+        <div style="font-size:12px;color:#444441;margin-top:8px">Written by Application Arch. draw.io diagrams embedded in Confluence pages. C4 model recommended.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Operational docs</div>
+        <div style="font-size:12px;color:#73726c;margin-top:4px">TechDocs (.md in repo)</div>
+        <div style="font-size:12px;color:#444441;margin-top:8px">Runbook, API reference, changelog, ADRs. Rendered in Backstage Docs tab. Version-controlled with code.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="text-align:center;font-size:12px;color:#b4b2a9;padding-top:24px;border-top:0.5px solid #d3d1c7">
+    App Tracker Blueprint &nbsp;·&nbsp; Backstage v1.48.0 &nbsp;·&nbsp; March 2026 &nbsp;·&nbsp; v1.1
+  </div>
+
+</div>
+</body>
+</html>
